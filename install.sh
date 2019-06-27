@@ -39,9 +39,9 @@ _pip_install() {
         ccache -z
     fi
     if [[ -n "$CI" ]]; then
-        time pip install "$@"
+        time pip install "$@" --no-binary :all:
     else
-        pip install "$@"
+        pip install "$@" --no-binary :all:
     fi
     if [[ -n "$CI" ]]; then
         ccache -s

@@ -119,6 +119,7 @@ def _get_coreml_axis(axes, builder, node, graph, err): # type: (List[int], Neura
     if node.inputs[0] not in graph.shape_dict:
         return err.unsupported_op_configuration(builder, node, graph, "Failed to translate axis")
     input_shape = graph.shape_dict[node.inputs[0]]
+    # print(input_shape)
     if len(input_shape) == 1: coreml_axis = 'C'
     elif len(input_shape) == 2:
         if len(axes) == 1 and axes[0] == 1: coreml_axis = 'C'
@@ -271,7 +272,7 @@ def _convert_add(builder, node, graph, err):  # type: (NeuralNetworkBuilder, Nod
     - (S=-1,B=-1,1,1,W)
     - (S=-1,B=-1,1,H,1)
     - (S=-1,B=-1,C,1,W)
-    - (S=-1,B=-1,C,H,1)    
+    - (S=-1,B=-1,C,H,1)
     '''
     _convert_broadcast_op(builder, node, graph, err, "ADD")
 
@@ -330,7 +331,15 @@ def _convert_conv(builder, node, graph, err): # type: (NeuralNetworkBuilder, Nod
         params_dict['same_padding_asymmetry_mode'] = 'BOTTOM_RIGHT_HEAVY'
 
         if not params_dict['is_deconv']:
-            params_dict['W'] = params_dict['W'].transpose((2, 3, 1, 0))  # type: ignore
+            # print(params_dict['W'].shape)
+            # print(params_dict)
+            # params_dict['W'] = params_dict['W'].transpose((2, 3, 1, 0))  # type: ignore
+            #
+            # pass
+            try:
+                params_dict['W'] = params_dict['W'].transpose((2, 3, 1, 0))
+            except:
+                pass
         else:
             params_dict['W'] = params_dict['W'].transpose((2, 3, 0, 1))  # type: ignore
 
@@ -401,9 +410,13 @@ def _convert_conv(builder, node, graph, err): # type: (NeuralNetworkBuilder, Nod
             oc = params_dict['W'].shape[3] * params_dict['groups']
             kc = params_dict['W'].shape[2]
         else:
-            oc = params_dict['W'].shape[3]
-            kc = params_dict['W'].shape[2]
-
+            print()
+            if  len(params_dict['W'].shape) < 4:
+                oc = 0
+                kc = 1
+            else:
+                oc = params_dict['W'].shape[3]
+                kc = params_dict['W'].shape[2]
         if params_dict.get('is_pre_pad', False):
             builder.add_padding(
                 name=node.name + '_pre_pad',  # type: ignore
@@ -415,14 +428,30 @@ def _convert_conv(builder, node, graph, err): # type: (NeuralNetworkBuilder, Nod
                 output_name=input_name,
                 value=0
             )
+        if  len(params_dict['kernel_shape']) < 2:
+            kernel_shape_1 = 1
+        else:
+            kernel_shape_1 = params_dict['kernel_shape'][1]
+        if len(params_dict['strides']) < 2:
+            stride_1 = 1
+        else:
+            stride_1  =  params_dict['strides'][1]
+        if len(params_dict['pads']) < 3:
+            pad_2 = 0
+            pad_3 = 0
+        else:
+            pad_2 = params_dict['pads'][2]
+            pad_3 = params_dict['pads'][3]
+        if len(params_dict['dilations']) <  2:
+            params_dict['dilations'].append(1)
         builder.add_convolution(
             name=node.name,
             kernel_channels=kc,
             output_channels=oc,
             height=params_dict['kernel_shape'][0],
-            width=params_dict['kernel_shape'][1],
+            width=kernel_shape_1,
             stride_height=params_dict['strides'][0],
-            stride_width=params_dict['strides'][1],
+            stride_width=stride_1,
             border_mode=params_dict['padding_type'],
             same_padding_asymmetry_mode=params_dict['same_padding_asymmetry_mode'],
             groups=params_dict['groups'],
@@ -435,9 +464,9 @@ def _convert_conv(builder, node, graph, err): # type: (NeuralNetworkBuilder, Nod
             output_name=output_name,
             dilation_factors=params_dict['dilations'],
             padding_top=params_dict['pads'][0],
-            padding_bottom=params_dict['pads'][2],
+            padding_bottom=pad_2,
             padding_left=params_dict['pads'][1],
-            padding_right=params_dict['pads'][3]
+            padding_right=pad_3
         )
         if params_dict.get('is_post_crop', False):
             builder.add_crop(
@@ -629,7 +658,10 @@ def _convert_pool(builder, node, graph, err):  # type: (NeuralNetworkBuilder, No
                 params_dict['width'] = kernel_shape[0]
             else:
                 params_dict['height'] = kernel_shape[0]
-                params_dict['width'] = kernel_shape[1]
+                if len(kernel_shape) < 2:
+                    params_dict['width'] = 1
+                else:
+                    params_dict['width'] = kernel_shape[1]
 
             pads = node.attrs.get('pads', None)
             if pads:
@@ -642,8 +674,12 @@ def _convert_pool(builder, node, graph, err):  # type: (NeuralNetworkBuilder, No
                 else:
                     params_dict['pad_t'] = pads[0]
                     params_dict['pad_l'] = pads[1]
-                    params_dict['pad_b'] = pads[2]
-                    params_dict['pad_r'] = pads[3]
+                    if len(pads) < 4:
+                        params_dict['pad_b'] = 0
+                        params_dict['pad_r'] = 0
+                    else:
+                        params_dict['pad_b'] = pads[2]
+                        params_dict['pad_r'] = pads[3]
 
             strides = node.attrs.get('strides', [1, 1])
             if axis == 'height':
@@ -652,7 +688,10 @@ def _convert_pool(builder, node, graph, err):  # type: (NeuralNetworkBuilder, No
                 params_dict['stride_width'] = strides[0]
             else:
                 params_dict['stride_height'] = strides[0]
-                params_dict['stride_width'] = strides[1]
+                if len(strides) < 2:
+                    params_dict['stride_width'] = 1
+                else:
+                    params_dict['stride_width'] = strides[1]
 
             if "auto_pad" in node.attrs and \
                     not _compare(node.attrs["auto_pad"], 'VALID'):
@@ -737,13 +776,26 @@ def _convert_bn(builder, node, graph, err):  # type: (NeuralNetworkBuilder, Node
             np.zeros(shape=channels, dtype=np.float32)
     var = node.input_tensors[node.inputs[4]] if node.inputs[4] in node.input_tensors else \
             np.ones(shape=channels, dtype=np.float32)
-    mapp = graph.onnx_coreml_shape_mapping[node.inputs[0]]
-    if mapp == [2,3,4]:
-        _add_transpose_before_after(add_bn,
-                                [node.inputs[0]],
-                                node.outputs,
-                                [0, 2, 1, 3],
-                                builder=builder, node=node,scale=scale,bias=bias,mean=mean,var=var,epsilon=epsilon,channels=channels)
+    if node.inputs[0] in graph.onnx_coreml_shape_mapping:
+        mapp = graph.onnx_coreml_shape_mapping[node.inputs[0]]
+        if mapp == [2,3,4]:
+            _add_transpose_before_after(add_bn,
+                                    [node.inputs[0]],
+                                    node.outputs,
+                                    [0, 2, 1, 3],
+                                    builder=builder, node=node,scale=scale,bias=bias,mean=mean,var=var,epsilon=epsilon,channels=channels)
+        else:
+            builder.add_batchnorm(
+                name=node.name,
+                channels=channels[0],
+                gamma=scale,
+                beta=bias,
+                mean=mean,
+                variance=var,
+                input_name=node.inputs[0],
+                output_name=node.outputs[0],
+                epsilon=epsilon
+            )
     else:
         builder.add_batchnorm(
             name=node.name,
@@ -1027,6 +1079,8 @@ def _convert_reduce(builder, node, graph, err):  # type: (NeuralNetworkBuilder, 
         for ind in [['S','B','C','H','W'][mapp[i]] for i in axes]: coreml_axis += ind
         coreml_axis = ''.join(sorted(coreml_axis))
     else:
+        # print(axes)
+
         coreml_axis = _get_coreml_axis(axes, builder, node, graph, err)
 
     if coreml_axis in ['C', 'H', 'W', 'HW', 'CHW']:
@@ -1035,24 +1089,29 @@ def _convert_reduce(builder, node, graph, err):  # type: (NeuralNetworkBuilder, 
         if node.op_type in ['ReduceMean']:
             return err.unsupported_op_configuration(builder, node, graph,
                                                     "Unable to translate axes attribute to CoreML axis parameter for %s" % axes)
-        n = len(coreml_axis)
-        for i, ax in enumerate(coreml_axis):
-            if ax not in ['C', 'H', 'W']:
-                return err.unsupported_op_configuration(builder, node, graph,
-                                                    "Unable to translate axes attribute to CoreML axis parameter for %s" % axes)
-            else:
-                if i == 0:
-                    iname = input_name
+        # print(coreml_axis)
+
+        if coreml_axis is None:
+            pass
+        else:
+            n = len(coreml_axis)
+            for i, ax in enumerate(coreml_axis):
+                if ax not in ['C', 'H', 'W']:
+                    return err.unsupported_op_configuration(builder, node, graph,
+                                                        "Unable to translate axes attribute to CoreML axis parameter for %s" % axes)
                 else:
-                    iname = input_name + str(i)
-                if i == n-1:
-                    oname = output_name
-                else:
-                    oname = input_name + str(i+1)
-                if i < n-1:
-                    _add_reduce([iname], [oname], builder=builder, node=node, coreml_axis=ax, mode=mode, add_log=False)
-                else:
-                    _add_reduce([iname], [oname], builder=builder, node=node, coreml_axis=ax, mode=mode, add_log=True)
+                    if i == 0:
+                        iname = input_name
+                    else:
+                        iname = input_name + str(i)
+                    if i == n-1:
+                        oname = output_name
+                    else:
+                        oname = input_name + str(i+1)
+                    if i < n-1:
+                        _add_reduce([iname], [oname], builder=builder, node=node, coreml_axis=ax, mode=mode, add_log=False)
+                    else:
+                        _add_reduce([iname], [oname], builder=builder, node=node, coreml_axis=ax, mode=mode, add_log=True)
 
     '''
     update output shape map
@@ -1131,8 +1190,13 @@ def _convert_gemm(builder, node, graph, err):  # type: (NeuralNetworkBuilder, No
         err.missing_initializer(node, "Second input to Gemm layer must be a constant")
 
     b = None
+    # print(node.input_tensors)
+    # print(node.inputs)
     if len(node.inputs) > 2:
-        b = (node.input_tensors[node.inputs[2]]).flatten()
+        if node.inputs[2] in node.input_tensors:
+            b = (node.input_tensors[node.inputs[2]]).flatten()
+        else:
+            pass
     if len(W.shape) != 2 or (b is not None and len(b.shape) != 1):
         return err.unsupported_op_configuration(builder, node, graph, "This Gemm layer cannot be converted to CoreML inner_product layer")
 
@@ -1164,6 +1228,7 @@ def _convert_matmul(builder, node, graph, err):  # type: (NeuralNetworkBuilder, 
     if weight_name in node.input_tensors:
         W = node.input_tensors[weight_name]
     else:
+
         err.missing_initializer(node, "Second input to Matmul layer must be a constant")
 
     if len(W.shape) != 2:
@@ -1310,7 +1375,12 @@ def _convert_pad(builder, node, graph, err):  # type: (NeuralNetworkBuilder, Nod
         elif axis == 'width':
             pad_l, pad_r = pads
         else:
-            pad_t, pad_l, pad_b, pad_r = pads
+            # pad_t, pad_b = pads
+            # print(pads)
+            if len(pads) < 4:
+                pass
+            else:
+                pad_t, pad_l, pad_b, pad_r = pads
         params_dict['pad_t'] = pad_t
         params_dict['pad_b'] = pad_b
         params_dict['pad_l'] = pad_l
